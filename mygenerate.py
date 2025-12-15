@@ -2,12 +2,18 @@
 
 # generate 64 images for each class and save as pngs
 
+import os
 import torch
-from generate import *
+import pickle
+import tqdm
+
+# from generate import *
+from generate import dist, dnnlib, StackedRandomGenerator, ablation_sampler, edm_sampler
 
 
 def load_network(
-    network_pkl: str, device: torch.device = torch.device("cuda")
+    network_pkl: str,
+    device: torch.device = "cuda",
 ) -> torch.nn.Module:
     """
     Load EDM network/model from pkl save file or URL pointing to the
@@ -25,7 +31,7 @@ def load_network(
     return net
 
 
-def mymain(
+def driver(
     *,
     network_pkl: str | torch.nn.Module,
     outdir: str | None = None,
@@ -33,7 +39,7 @@ def mymain(
     seeds: list[int],
     class_idx: list[int] | None,
     max_batch_size: int,
-    device: torch.device = torch.device("cuda"),
+    device: torch.device = "cuda",
     **sampler_kwargs,
 ) -> torch.Tensor:
     """
@@ -188,7 +194,7 @@ if False:
             print(out)
 
             try:
-                mymain(
+                driver(
                     network_pkl=network,
                     class_idx=class_,
                     outdir=out,
@@ -239,14 +245,14 @@ if False:
 
     net = load_network(network, "cuda")
 
-    ims1 = mymain(
+    ims1 = driver(
         network_pkl=net,
         class_idx=class_,
         seeds=[1 * x for x in range(1, 1 + nout)],
         max_batch_size=2,
     )
 
-    ims2 = mymain(
+    ims2 = driver(
         network_pkl=net,
         class_idx=class_,
         seeds=[1 * x for x in range(1, 1 + nout)],
@@ -264,7 +270,7 @@ if False:
 
     net = load_network(network, "cuda")
 
-    ims1 = mymain(
+    ims1 = driver(
         network_pkl=net,
         class_idx=None,
         seeds=[1 * x for x in range(1, 1 + nout)],
@@ -283,7 +289,7 @@ if True:
     net = load_network(network, "cpu")
 
     t0 = time.time()
-    ims1 = mymain(
+    ims1 = driver(
         network_pkl=net,
         class_idx=class_,
         seeds=torch.randperm(nout),
