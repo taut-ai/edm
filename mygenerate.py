@@ -6,8 +6,11 @@ import os
 import torch
 import pickle
 import tqdm
+import PIL
 
 from generate import dist, dnnlib, StackedRandomGenerator, ablation_sampler, edm_sampler
+
+DEBUG = False
 
 
 def load_network(
@@ -130,7 +133,7 @@ def driver(
                 class_labels[:, class_idx] = 1
 
             # Generate images.
-            # JM: there are two sampler available in the code base (and described in paper):
+            # JM: there are two samplers available in the code base (and described in paper):
             #    - edm_sampler
             #    - ablation_sampler
             sampler_kwargs = {
@@ -174,3 +177,138 @@ def driver(
         torch.distributed.destroy_process_group()
 
     return images
+
+
+# torchvision cifar dataset is stored as a bunch of pickled numpy byte arrays in
+# (N, H, w, CHN) order.ArithmeticError
+# we are going to store as byte tensors in (N, CHN, H, W) order, where N is
+# requested `max_batch_size`
+
+
+def make_dataset(
+    *,
+    network_pkl: str | torch.nn.Module,
+    nimages: int,
+    max_batch_size: int,
+    max_images_per_file: int,
+    device: torch.device = "cuda",
+    outdir: str | None = None,
+):
+    """
+    Stand alone version of `generate.main(). This is setup to run on
+    single CPU/GPU -- no longer uses `torch.distributed`
+
+    On storm, performance is around 12 images/s or 0.082 s/image. So
+    about 22h to generate 1M images on 4090 (batchsize=64)
+
+    Parameters
+    ----------
+    network_pkl: str | torch.nn.Module
+        Instance of the EDM model to use (save file/URL or actual model).
+        This generally should be one of the conditional ("cond") models,
+        since the unconditional models don't take `class_idx`.
+
+    nimages: int
+        Total number of images to generate. Classes will be roughly evenly
+        spilt - random draws, all classes equally likely.
+
+    max_batch_size: int
+        Batch size for generation - diffusion model called with with this side
+
+    max_images_per_file: int
+        Number of batches to dump in each data file
+
+    device: torch.device = "cuda",
+        Processing device
+
+    """
+    if outdir is None:
+        outdir = "."
+    else:
+        os.makedirs(outdir, exist_ok=True)
+
+    seeds = torch.randperm(int(nimages)) * int(100 * torch.rand(1))
+
+    num_batches = (len(seeds) - 1) // max_batch_size + 1
+    all_batches = torch.as_tensor(seeds).tensor_split(num_batches)
+
+    # Load network.
+    if isinstance(network_pkl, torch.nn.Module):
+        net = network_pkl
+        net_name = "?unknown?"
+    else:
+        net = load_network(network_pkl, device)
+        net_name = network_pkl
+
+    # Loop over batches.
+    print(f'Generating {len(seeds)} images to "{outdir}"...')
+    images_acc = None
+    file_no = 0
+    for batch_seeds in tqdm.tqdm(all_batches, unit="batch"):
+        batch_size = len(batch_seeds)
+        if batch_size == 0:
+            continue
+
+        # Pick latents and labels.
+        rnd = StackedRandomGenerator(device, batch_seeds)
+        latents = rnd.randn(
+            [batch_size, net.img_channels, net.img_resolution, net.img_resolution],
+            device=device,
+        )
+        class_labels = torch.eye(net.label_dim, device=device)[
+            rnd.randint(net.label_dim, size=[batch_size], device=device)
+        ]
+        if DEBUG:
+            images = torch.rand(len(class_labels), 3, 32, 32)
+        else:
+            images = edm_sampler(net, latents, class_labels, randn_like=rnd.randn_like)
+
+        # save images and labels for this batch
+        images_ = (images * 127.5 + 128).clip(0, 255).to(torch.uint8).cpu()
+        class_labels_ = class_labels.argmax(1).cpu().to(torch.int).cpu()
+
+        # images, labels and associated accumulators should be on cpu
+        if images_acc is None:
+            images_acc = images_
+            class_labels_acc = class_labels_
+            seeds_acc = batch_seeds.cpu()
+        else:
+            images_acc = torch.cat((images_acc, images_))
+            class_labels_acc = torch.cat((class_labels_acc, class_labels_))
+            seeds_acc = torch.cat((seeds_acc, batch_seeds.cpu()))
+
+        if images_acc.shape[0] >= max_images_per_file:
+            # have enough images to save -- write up to max_images_per_file
+            # and clear written data from accumulators
+            torch.save(
+                dict(
+                    images=images_acc[:max_images_per_file],
+                    labels=class_labels_acc[:max_images_per_file],
+                    seeds=seeds_acc[:max_images_per_file],
+                    diffmodel=net_name,
+                ),
+                os.path.join(outdir, f"data_batch_{file_no}"),
+            )
+            images_acc = images_acc[max_images_per_file:]
+            class_labels_acc = class_labels_acc[max_images_per_file:]
+            seeds_acc = seeds_acc[max_images_per_file:]
+            file_no += 1
+
+    if len(images) > 0:
+        # there are residual images generated after the last write, so
+        # save partial last accumulated chunk
+        torch.save(
+            dict(images=images_acc, labels=class_labels_acc),
+            os.path.join(outdir, f"data_batch_{file_no}"),
+        )
+
+
+if __name__ == "__main__":
+    make_dataset(
+        network_pkl="edm-cifar10-32x32-cond-ve.pkl",
+        nimages=1_000_000,
+        max_batch_size=700,
+        max_images_per_file=5_000,
+        outdir="1e6",
+        device="cuda",
+    )
