@@ -1,4 +1,4 @@
-# %%
+ %%
 
 # generate 64 images for each class and save as pngs
 
@@ -109,6 +109,8 @@ def driver(
 
         # Loop over batches.
         dist.print0(f'Generating {len(seeds)} images to "{outdir}"...')
+
+        # there's fencepost error in here and it generates one extra chunk!
         for batch_seeds in tqdm.tqdm(
             rank_batches, unit="batch", disable=(dist.get_rank() != 0)
         ):
@@ -298,7 +300,7 @@ def make_dataset(
         # there are residual images generated after the last write, so
         # save partial last accumulated chunk
         torch.save(
-            dict(images=images_acc, labels=class_labels_acc),
+            dict(images=images_acc, labels=class_labels_acc, seeds=seeds_acc, diffmodel=net_name),
             os.path.join(outdir, f"data_batch_{file_no}"),
         )
 
