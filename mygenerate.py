@@ -311,6 +311,6 @@ if __name__ == "__main__":
         nimages=1_000_000,
         max_batch_size=700,
         max_images_per_file=5_000,
-        outdir="cifar10",
+        outdir="cifar10edm",
         device="cuda",
     )
