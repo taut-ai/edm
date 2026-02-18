@@ -1,6 +1,4 @@
- %%
-
-# generate 64 images for each class and save as pngs
+# run as script to generate n-million images (default is 1m)
 
 import os
 import torch
@@ -288,6 +286,7 @@ def make_dataset(
                     labels=class_labels_acc[:max_images_per_file],
                     seeds=seeds_acc[:max_images_per_file],
                     diffmodel=net_name,
+                    version=0,
                 ),
                 os.path.join(outdir, f"data_batch_{file_no}"),
             )
@@ -300,17 +299,27 @@ def make_dataset(
         # there are residual images generated after the last write, so
         # save partial last accumulated chunk
         torch.save(
-            dict(images=images_acc, labels=class_labels_acc, seeds=seeds_acc, diffmodel=net_name),
+            dict(
+                images=images_acc,
+                labels=class_labels_acc,
+                seeds=seeds_acc,
+                diffmodel=net_name,
+                version=0,
+            ),
             os.path.join(outdir, f"data_batch_{file_no}"),
         )
 
 
 if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        n_million = 1
+    else:
+        n_million = int(sys.argv[1])
     make_dataset(
         network_pkl="edm-cifar10-32x32-cond-ve.pkl",
-        nimages=1_000_000,
+        nimages=n_million * 1_000_000,
         max_batch_size=700,
         max_images_per_file=5_000,
-        outdir="cifar10edm",
+        outdir=f"cifar10edm-{n_million}m",
         device="cuda",
     )
