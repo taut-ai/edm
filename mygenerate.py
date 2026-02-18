@@ -1,6 +1,7 @@
 # run as script to generate n-million images (default is 1m)
 
 import os
+import sys
 import torch
 import pickle
 import tqdm
@@ -315,6 +316,7 @@ if __name__ == "__main__":
         n_million = 1
     else:
         n_million = int(sys.argv[1])
+    print(f"generating {n_million}m images.")
     make_dataset(
         network_pkl="edm-cifar10-32x32-cond-ve.pkl",
         nimages=n_million * 1_000_000,
